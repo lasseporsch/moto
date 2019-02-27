@@ -523,12 +523,12 @@ class CognitoIdpBackend(BaseBackend):
         return user_pool.users[username]
 
     @paginate(60, "pagination_token", "limit")
-    def list_users(self, user_pool_id, pagination_token=None, limit=None):
+    def list_users(self, user_pool_id, pagination_token=None, limit=None, filter_string=None):
         user_pool = self.user_pools.get(user_pool_id)
         if not user_pool:
             raise ResourceNotFoundError(user_pool_id)
 
-        return user_pool.users.values()
+        return filter_users(user_pool.users.values(), filter_string)
 
     def admin_disable_user(self, user_pool_id, username):
         user = self.admin_get_user(user_pool_id, username)
@@ -680,3 +680,66 @@ def find_region_by_value(key, value):
                 return region
 
     return cognitoidp_backends.keys()[0]
+
+
+def filter_users(users, filter_string):
+    """
+    Filters a list of users by te provided filter expression. The format of the filter expression is described here:
+    https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/cognito-idp.html#CognitoIdentityProvider.Client.list_users
+
+    Basically, the string can be of one of te following formats:
+    '<attribute>=<value>  --> filters the users by the given attribute value using "equals"
+    '<attribute>^=<value> --> filters the users by the given attribute value using "starts with"
+    :param users: list of users
+    :param filter_string: the filter expression
+    :return: The filtered list of users
+    """
+
+    allowed_attributes = [
+        "username",
+        "email",
+        "phone_number",
+        "name",
+        "given_name",
+        "family_name",
+        "preferred_username",
+        "cognito:user_status",
+        "status",
+        "sub"
+    ]
+
+    def get_attribute_value(user, attribute):
+        for user_attribute in user.attributes:
+            if user_attribute["Name"] == attribute:
+                return user_attribute["Value"]
+        return None
+
+    def user_matches_equal_filter(user, attribute, value):
+        user_attribute_value = get_attribute_value(user, attribute)
+        if user_attribute_value is None:
+            return False
+        else:
+            return value.lower() == user_attribute_value.lower()
+
+    def user_matches_startswith_filter(user, attribute, value):
+        user_attribute_value = get_attribute_value(user, attribute)
+        if user_attribute_value is None:
+            return False
+        else:
+            return user_attribute_value.lower().startswith(value.lower())
+
+    # By default we don't filter:
+    filtered_users = users
+
+    if filter_string is not None:
+        if "^=" in filter_string:
+            attribute, value = filter_string.split("^=", 1)
+            if attribute in allowed_attributes:
+                filtered_users = [user for user in users if user_matches_startswith_filter(user, attribute, value)]
+
+        elif "=" in filter_string:
+            attribute, value = filter_string.split("=", 1)
+            if attribute in allowed_attributes:
+                filtered_users = [user for user in users if user_matches_equal_filter(user, attribute, value)]
+
+    return filtered_users
