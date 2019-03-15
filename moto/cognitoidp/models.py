@@ -13,7 +13,7 @@ from jose import jws
 
 from moto.compat import OrderedDict
 from moto.core import BaseBackend, BaseModel
-from .exceptions import GroupExistsException, NotAuthorizedError, ResourceNotFoundError, UserNotFoundError
+from .exceptions import GroupExistsException, NotAuthorizedError, ResourceNotFoundError, UserNotFoundError, InvalidParameterError
 
 UserStatus = {
     "FORCE_CHANGE_PASSWORD": "FORCE_CHANGE_PASSWORD",
@@ -688,8 +688,12 @@ def filter_users(users, filter_string):
     https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/cognito-idp.html#CognitoIdentityProvider.Client.list_users
 
     Basically, the string can be of one of te following formats:
-    '<attribute>=<value>  --> filters the users by the given attribute value using "equals"
-    '<attribute>^=<value> --> filters the users by the given attribute value using "starts with"
+    '<attribute>=<value>'  --> filters the users by the given attribute value using "equals"
+    '<attribute>^=<value>' --> filters the users by the given attribute value using "starts with"
+
+    Beware that AWS expects the value to be surrounded by double quotes. That means we have to strip them from the
+    actual value.
+
     :param users: list of users
     :param filter_string: the filter expression
     :return: The filtered list of users
@@ -708,21 +712,29 @@ def filter_users(users, filter_string):
         "sub"
     ]
 
-    def get_attribute_value(user, attribute):
+    def get_attribute_value_from_user(user, attribute):
         for user_attribute in user.attributes:
             if user_attribute["Name"] == attribute:
                 return user_attribute["Value"]
         return None
 
+    def get_attribute_and_value_from_filter(filter_string, comparator):
+        attribute, value_with_quotes = filter_string.split(comparator, 1)
+        if attribute not in allowed_attributes:
+            raise InvalidParameterError(f"Invalid search attribute: {attribute}")
+        if not value_with_quotes.startswith("\"") or not value_with_quotes.endswith("\""):
+            raise InvalidParameterError("Error while parsing filter.")
+        return attribute, value_with_quotes.strip("\"")
+
     def user_matches_equal_filter(user, attribute, value):
-        user_attribute_value = get_attribute_value(user, attribute)
+        user_attribute_value = get_attribute_value_from_user(user, attribute)
         if user_attribute_value is None:
             return False
         else:
             return value.lower() == user_attribute_value.lower()
 
     def user_matches_startswith_filter(user, attribute, value):
-        user_attribute_value = get_attribute_value(user, attribute)
+        user_attribute_value = get_attribute_value_from_user(user, attribute)
         if user_attribute_value is None:
             return False
         else:
@@ -733,13 +745,14 @@ def filter_users(users, filter_string):
 
     if filter_string is not None:
         if "^=" in filter_string:
-            attribute, value = filter_string.split("^=", 1)
-            if attribute in allowed_attributes:
-                filtered_users = [user for user in users if user_matches_startswith_filter(user, attribute, value)]
+            attribute, value = get_attribute_and_value_from_filter(filter_string, "^=")
+            filtered_users = [user for user in users if user_matches_startswith_filter(user, attribute, value)]
 
         elif "=" in filter_string:
-            attribute, value = filter_string.split("=", 1)
-            if attribute in allowed_attributes:
-                filtered_users = [user for user in users if user_matches_equal_filter(user, attribute, value)]
+            attribute, value = get_attribute_and_value_from_filter(filter_string, "=")
+            filtered_users = [user for user in users if user_matches_equal_filter(user, attribute, value)]
+
+        else:
+            raise InvalidParameterError("Error while parsing filter.")
 
     return filtered_users

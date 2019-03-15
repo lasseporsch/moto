@@ -42,3 +42,13 @@ class NotAuthorizedError(BadRequest):
             "message": message,
             '__type': 'NotAuthorizedException',
         })
+
+
+class InvalidParameterError(BadRequest):
+
+    def __init__(self, message):
+        super(InvalidParameterError, self).__init__()
+        self.description = json.dumps({
+            "message": message,
+            '__type': 'InvalidParameterException',
+        })

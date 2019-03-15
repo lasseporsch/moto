@@ -828,6 +828,35 @@ def test_list_users():
 
 
 @mock_cognitoidp
+def test_list_users_filtered():
+    conn = boto3.client("cognito-idp", "us-west-2")
+
+    user_pool_id = conn.create_user_pool(PoolName=str(uuid.uuid4()))["UserPool"]["Id"]
+    conn.admin_create_user(UserPoolId=user_pool_id,
+                           Username="djones",
+                           UserAttributes=[{"Name": "family_name", "Value": "Jones"},
+                                           {"Name": "given_name", "Value": "Django"}])
+    conn.admin_create_user(UserPoolId=user_pool_id,
+                           Username="hjamison",
+                           UserAttributes=[{"Name": "family_name", "Value": "Jamison"},
+                                           {"Name": "given_name", "Value": "Harold"}])
+
+    # Test equality filter
+    result1 = conn.list_users(UserPoolId=user_pool_id, Filter="given_name=\"Harold\"")
+    result1["Users"].should.have.length_of(1)
+    result1["Users"][0]["Username"].should.equal("hjamison")
+
+    # Test startswith filter
+    result2 = conn.list_users(UserPoolId=user_pool_id, Filter="family_name^=\"J\"")
+    result2["Users"].should.have.length_of(2)
+
+    # Test unsupported attribute
+    try:
+        result3 = conn.list_users(UserPoolId=user_pool_id, Filter="something=\"a value\"")
+    except conn.exceptions.InvalidParameterError as error:
+        print(error)
+
+@mock_cognitoidp
 def test_list_users_returns_limit_items():
     conn = boto3.client("cognito-idp", "us-west-2")
     user_pool_id = conn.create_user_pool(PoolName=str(uuid.uuid4()))["UserPool"]["Id"]
